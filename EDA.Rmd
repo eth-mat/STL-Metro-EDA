@@ -8,10 +8,38 @@ editor_options:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
 ```
 
 ## Read in Data
 
 ```{r}
 data <- read.csv("../clean_data.csv")
+```
+
+```{r}
+head(data)
+```
+
+```{r}
+data <- data %>% select(-c('row_id', 'service_type_id', 'block_id', 'block_abbr', 'route_id', 'service_type_id', 'property_tag','geo_node_id', 'latitude', 'longitude'))
+```
+
+```{r}
+data$time_stopped <- data$departure_time - data$arrival_time
+```
+
+# Stop time vs. Boardings/Alightings
+
+```{r}
+ggplot(data, aes(x = time_stopped, y = boardings + alightings, color = factor(route_abbr))) +
+  geom_point(alpha = 0.5) +
+  labs(
+    x = "Time Stopped",
+    y = "Boardings + Alightings",
+    color = "Route",
+    title = "Total Ridership Activity vs. Time Stopped, by Route"
+  ) +
+  theme_minimal()
 ```
