@@ -1,0 +1,203 @@
+---
+title: "Bus Stop Time Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 8, fig.height = 5)
+input_file <- "~/Desktop/Statistics_Practicum/70_grand_20250701-20260630.csv"
+
+```
+
+
+##Read in the original data
+
+```{r read-data}
+dat0 <- read.csv(input_file)
+
+# lowercase the column names
+colnames(dat0) <- tolower(colnames(dat0))
+```
+
+##Create a unique stop identifier
+
+```{r row-id}
+library(data.table)
+setDT(dat0)
+dat0[, row_id := .GRP, by = .(calendar_id, trip_id, geo_node_name)]
+
+dat0 <- dat0[, .(
+    trip_id = trip_id[1],
+    trip_sequence = trip_sequence[1],
+    block_id = block_id[1],
+    block_abbr = block_abbr[1],
+    route_id = route_id[1],
+    route_abbr = route_abbr[1],
+    route_direction_id = route_direction_id[1],
+    service_type_id = service_type_id[1],
+    property_tag = property_tag[1],
+    geo_node_id = geo_node_id[1],
+    latitude = latitude[1] / 10^7,
+    longitude = longitude[1] / 10^7,
+    geo_node_name = geo_node_name[1],
+    public_stop_number = public_stop_number[1],
+    boardings = sum(boardings),
+    alightings = sum(alightings),
+    arrival_time = actual_arrival_time[1],
+    departure_time = actual_departure_time[1],
+    adherence = adherence[1],
+    date = date[1]
+), by = row_id]
+```
+
+
+
+## Additional cleaning and new variables
+
+Stop time ("dwell time") = departure_time - arrival_time, in seconds.
+
+```{r cleaning}
+library(dplyr); library(lubridate)
+
+dat2 <- dat0 %>%
+  mutate(
+    date = as.Date(date),
+    dwell = departure_time - arrival_time,
+    arrival_hour = (arrival_time / 3600) %% 24,
+    hour_bin = floor(arrival_hour),
+    weekday = wday(date, label = TRUE, week_start = 1),
+    day_type = ifelse(wday(date, week_start = 1) >= 6, "Weekend", "Weekday"),
+    direction    = factor(route_direction_id, levels = c(7, 9), labels = c("Northbound", "Southbound")))  %>%
+  #number stops before filtering
+  group_by(date, trip_id) %>%
+  arrange(arrival_time, .by_group = TRUE) %>%
+  mutate(stop_order = row_number()) %>%
+  ungroup()
+
+#removing missing values, negative times, and outliers (99th percentile)
+n_start   <- nrow(dat2)
+max_dwell <- quantile(dat2$dwell, 0.99, na.rm = TRUE)
+
+dat2 %>%
+  mutate(reason = case_when(
+    is.na(arrival_time) | is.na(departure_time) ~ "Missing time",
+    dwell < 0 ~ "Negative stop time",
+    dwell > max_dwell ~ "Above 99th percentile",
+    TRUE ~ "Kept")) %>%
+  count(reason) %>%
+  mutate(percent = round(100 * n / n_start, 2))
+
+dat2 <- dat2 %>%
+  filter(!is.na(dwell), !is.na(arrival_time), !is.na(departure_time),
+         dwell >= 0, dwell <= max_dwell)
+
+#summary of the removed data and summary of the difference between arrival and departure times
+cat("Removed", n_start - nrow(dat2), "of", n_start, "rows (",
+    round(100 * (n_start - nrow(dat2)) / n_start, 1), "%); dwell cutoff =",
+    round(max_dwell), "seconds\n")
+
+summary(dat2$dwell)
+```
+
+```{r theme}
+#graph theme for consistency purposes
+
+theme_pub <- theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(color = "grey30"),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    strip.text  = element_text(face = "bold")
+  )
+
+dir_cols <- c("Northbound" = "#0072B2", "Southbound" = "#D55E00")
+hour_axis <- scale_x_continuous(breaks = seq(0, 23, 2), labels = function(x) sprintf("%02d:00", x))
+```
+
+```{r plot-1a}
+#boxplot by hour
+
+p1a <- ggplot(dat2, aes(x = factor(hour_bin), y = dwell)) +
+  geom_boxplot(fill = "#9ecae1", outlier.shape = NA, linewidth = 0.4) +
+  coord_cartesian(ylim = c(0, quantile(dat2$dwell, 0.95))) +
+  scale_y_continuous(breaks = seq(0, 200, by = 10)) + #label every 10 seconds
+  labs(title = "Stop Time by Hour of Day",
+       x = "Hour of arrival", y = "Stop time (seconds)") +
+  theme_pub
+p1a
+ggsave("fig1a_boxplot_by_hour.png", p1a, width = 8, height = 5, dpi = 300)
+```
+
+```{r plot-1b}
+#line graph by hour and route direction
+
+p1b <- ggplot(hourly, aes(x = hour_bin, y = median, color = direction)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  scale_color_manual(values = dir_cols, name = NULL) +
+  hour_axis +
+  expand_limits(y = c(0, 30)) + #axis covers at least 0 to 30
+  scale_y_continuous(breaks = seq(0, 30, by = 5)) + #label every 5 seconds
+  labs(title = "Median Stop Time Across Hour of Day by Direction",
+       x = "Hour of arrival", y = "Stop time (seconds)") +
+  theme_pub
+p1b
+ggsave("fig1b_median_line_by_hour.png", p1b, width = 8, height = 5, dpi = 300)
+```
+
+```{r}
+#graphs of median stop time by stop / location and route direction
+
+get_mode <- function(x) { ux <- unique(x); ux[which.max(tabulate(match(x, ux)))] }
+
+line_dat <- dat2 %>%
+  filter(route_abbr == route_of_interest) %>%
+  group_by(direction, geo_node_id, geo_node_name) %>%
+  summarize(stop_order = get_mode(stop_order),
+            n = n(),
+            median_dwell = median(dwell),
+            .groups = "drop")
+
+#Exclude terminals (first and last stop)
+line_trim <- line_dat %>%
+  group_by(direction) %>%
+  filter(stop_order > min(stop_order), stop_order < max(stop_order)) %>%
+  ungroup() %>%
+  filter(n >= 20) %>%
+  arrange(direction, stop_order)
+
+#Shared y-axis
+y_max  <- ceiling(max(line_trim$median_dwell, na.rm = TRUE) / 10) * 10
+y_step <- ifelse(y_max <= 60, 10, 20)
+y_max  <- ceiling(y_max / y_step) * y_step
+
+make_line <- function(dir_choice) {
+  d <- line_trim %>% filter(direction == dir_choice)
+
+#making the graphs
+  ggplot(d, aes(x = stop_order, y = median_dwell)) +
+    geom_line(color = dir_cols[[dir_choice]], linewidth = 0.9) +
+    geom_point(color = dir_cols[[dir_choice]], size = 1.8) +
+    scale_x_continuous(breaks = c(2, seq(10, max(d$stop_order), by = 10)),
+                       expand = expansion(mult = c(0.02, 0.02))) +
+    scale_y_continuous(limits = c(0, y_max),
+                       breaks = seq(0, y_max, by = y_step),
+                       expand = expansion(mult = c(0, 0.02))) +
+    labs(title = paste0("Median Stop Time Along Route ", route_of_interest, " (", dir_choice, ")"),
+         subtitle = "Stops shown in order of travel",
+         x = "Stop number along route (first stop = 1)",
+         y = "Median stop time (seconds)") +
+    theme_pub +
+    theme(plot.caption.position = "plot",
+          plot.caption = element_text(hjust = 0, color = "grey30"))
+}
+
+p_nb <- make_line("Northbound")
+p_nb
+ggsave("fig2e_line_stop_time_northbound.png", p_nb, width = 10, height = 5, dpi = 300)
+
+p_sb <- make_line("Southbound")
+p_sb
+ggsave("fig2e_line_stop_time_southbound.png", p_sb, width = 10, height = 5, dpi = 300)
+```
