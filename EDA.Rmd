@@ -39,7 +39,100 @@ ggplot(data, aes(x = time_stopped, y = boardings + alightings, color = factor(ro
     x = "Time Stopped",
     y = "Boardings + Alightings",
     color = "Route",
+    title = "Total Ridership Activity vs. Time Stopped"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(data, aes(x = time_stopped, y = boardings, color = factor(route_abbr))) +
+  geom_point(alpha = 0.5) +
+  labs(
+    x = "Time Stopped",
+    y = "Boardings",
+    color = "Route",
     title = "Total Ridership Activity vs. Time Stopped, by Route"
   ) +
   theme_minimal()
+```
+
+```{r}
+ggplot(data, aes(x = time_stopped, y = alightings, color = factor(route_abbr))) +
+  geom_point(alpha = 0.5) +
+  labs(
+    x = "Time Stopped",
+    y = "Alightings",
+    color = "Route",
+    title = "Total Ridership Activity vs. Time Stopped, by Route"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+data$on_time <- with(data, ifelse(data$adherence > 60, 1,
+                              ifelse(data$adherence < -300, -1, 0)))
+```
+
+```{r}
+data$on_time_color <- factor(data$on_time,
+                           levels = c(1, 0, -1),
+                           labels = c("blue", "black", "red"))
+
+ggplot(data, aes(x = time_stopped, y = boardings, color = on_time_color)) +
+  geom_point(alpha = 0.4) +
+  scale_color_identity(guide = "legend", name = "On Time Status") +
+  labs(x = "Time Stopped", y = "Boardings") +
+  theme_minimal()
+```
+
+```{r}
+data$on_time <- with(data, ifelse(adherence > 60, 1,
+                                  ifelse(adherence < -300, -1, 0)))
+
+cat("NA count in on_time:", sum(is.na(data$on_time)), "\n")
+cat("NA count in adherence:", sum(is.na(data$adherence)), "\n")
+
+data <- data %>% filter(!is.na(on_time))
+
+data$on_time_label <- factor(data$on_time,
+                             levels = c(1, 0, -1),
+                             labels = c("Early (adherence > 60)",
+                                        "On Time",
+                                        "Late (adherence < -300)"))
+
+p1 <- ggplot(data, aes(x = time_stopped + 1, fill = on_time_label)) +
+  geom_histogram(bins = 60) +
+  scale_x_log10() +
+  scale_fill_manual(values = c("blue", "black", "red")) +
+  facet_wrap(~on_time_label, ncol = 1, scales = "free_y") +
+  labs(
+    x = "Time Stopped (seconds, log scale)",
+    y = "Count of Stops",
+    title = "Distribution of Stop Time by On-Time Status"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        strip.text = element_text(face = "bold"))
+
+print(p1)
+ggsave("time_stopped_histogram.png", plot = p1, width = 8, height = 10, dpi = 300)
+
+data$boardings_bin <- cut(data$boardings,
+                          breaks = c(-1, 0, 1, 2, 5, 10, 20, Inf),
+                          labels = c("0", "1", "2", "3-5", "6-10", "11-20", "20+"))
+
+p2 <- ggplot(data, aes(x = boardings_bin, y = time_stopped, fill = on_time_label)) +
+  geom_boxplot(outlier.alpha = 0.1, outlier.size = 0.5) +
+  scale_y_log10() +
+  scale_fill_manual(values = c("blue", "black", "red")) +
+  labs(
+    x = "Boardings (binned)",
+    y = "Time Stopped (seconds, log scale)",
+    fill = "On-Time Status",
+    title = "Stop Time Variation Across Ridership Levels"
+  ) +
+  theme_minimal()
+
+print(p2)
+ggsave("time_stopped_by_boardings_boxplot.png", plot = p2, width = 9, height = 6, dpi = 300)
 ```
