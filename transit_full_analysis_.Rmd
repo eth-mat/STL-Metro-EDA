@@ -1,0 +1,516 @@
+---
+title: "Route 70 Grand: Stop Time Analysis"
+output: pdf_document
+---
+
+```{r setup-options, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE, message = FALSE, warning = FALSE, results = "hide",  # graphs only
+  fig.width = 7, fig.height = 4.5, out.width = "85%", fig.align = "center",
+  dev = "png", dpi = 200   # raster images keep the PDF small with millions of points
+)
+```
+
+```{r}
+
+input_file <- "~/Desktop/Statistics_Practicum/70_grand_20250701-20260630.csv"
+
+#setup
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+
+get_mode <- function(x) { ux <- unique(x); ux[which.max(tabulate(match(x, ux)))] }
+
+```
+
+```{r}
+#read data and lowercase name
+dat0 <- read.csv(input_file)
+colnames(dat0) <- tolower(colnames(dat0))
+if ("x" %in% names(dat0)) dat0$x <- NULL   # CSV row numbers, not data
+
+```
+
+```{r row-id}
+#Aggregate duplicate records (same logic as the sample code)
+#One row per calendar_id x trip_id x geo_node_name; passenger counts
+#Summed, everything else taken from the first record.
+#Grouping directly on the columns (instead of paste() to build a row_id)
+#Gives the same result without the memory cost.
+
+dat1 <- as.data.table(dat0)[, .(
+  date               = date[1],
+  trip_sequence      = trip_sequence[1],
+  block_id           = block_id[1],
+  block_abbr         = block_abbr[1],
+  route_id           = route_id[1],
+  route_abbr         = route_abbr[1],
+  route_direction_id = route_direction_id[1],
+  service_type_id    = service_type_id[1],
+  property_tag       = property_tag[1],
+  geo_node_id        = geo_node_id[1],
+  latitude           = latitude[1] / 10^7,
+  longitude          = longitude[1] / 10^7,
+  public_stop_number = public_stop_number[1],
+  boardings          = sum(boardings,  na.rm = TRUE),
+  alightings         = sum(alightings, na.rm = TRUE),
+  arrival_time       = actual_arrival_time[1],
+  departure_time     = actual_departure_time[1],
+  adherence          = adherence[1]
+), by = .(calendar_id, trip_id, geo_node_name)] %>%
+  as.data.frame()
+```
+
+```{r}
+#additional variables
+dat_vars <- dat1 %>%
+  mutate(
+    date  = as.Date(date, format = "%Y-%m-%d"),
+    weekday = wday(date, label = TRUE, week_start = 1),     # Mon ... Sun
+    day_type  = ifelse(wday(date, week_start = 1) >= 6, "Weekend", "Weekday"),
+    time_stopped = departure_time - arrival_time,
+    direction = factor(route_direction_id, levels = c(7, 9),labels = c("Northbound", "Southbound")),
+    arrival_hour = (arrival_time / 3600) %% 24,
+    hour_bin = floor(arrival_hour),
+    period = cut(arrival_hour, breaks = c(0, 6, 9, 15, 18, 21, 24), right = FALSE, labels = c("Early AM (0-6)", "AM peak (6-9)", "Midday (9-15)","PM peak (15-18)", "Evening (18-21)","Late night (21-24)")))
+
+```
+
+```{r}
+#remove missing and negative stop times
+n_start    <- nrow(dat_vars)
+n_missing  <- sum(is.na(dat_vars$time_stopped))
+n_negative <- sum(dat_vars$time_stopped < 0, na.rm = TRUE)
+
+dat2_raw <- dat_vars %>%
+  filter(!is.na(time_stopped), time_stopped >= 0)
+
+```
+
+```{r}
+#Stop order and stop IDs, per direction
+#Order is taken from trips that served the full route (the most common
+#number of stops per trip), so a missing stop on some trip can't shift
+#the numbering for everyone else.
+
+trip_stops <- dat2_raw %>%
+  filter(!is.na(direction)) %>%
+  group_by(direction, calendar_id, trip_id) %>%
+  arrange(arrival_time, .by_group = TRUE) %>%
+  mutate(trip_pos = row_number(), n_stops = n()) %>%
+  ungroup()
+
+full_n <- trip_stops %>%
+  distinct(direction, calendar_id, trip_id, n_stops) %>%
+  group_by(direction) %>%
+  summarise(full = get_mode(n_stops), .groups = "drop")
+full_n   # typical number of stops on a full trip, by direction
+
+stop_table <- trip_stops %>%
+  inner_join(full_n, by = "direction") %>%
+  filter(n_stops == full) %>%
+  group_by(direction, geo_node_id) %>%
+  summarise(geo_node_name = first(geo_node_name),
+            stop_seq      = get_mode(trip_pos),
+            pct_agree     = mean(trip_pos == stop_seq),
+            .groups = "drop") %>%
+  arrange(direction, stop_seq) %>%
+  mutate(stop_id = sprintf("%s-%02d",
+                           ifelse(direction == "Northbound", "NB", "SB"),
+                           stop_seq))
+dat2_raw <- dat2_raw %>%
+  left_join(select(stop_table, direction, geo_node_id, stop_seq, stop_id),
+            by = c("direction", "geo_node_id"))
+
+# Stops never served on a full trip (no position assigned)
+dat2_raw %>%
+  filter(!is.na(direction), is.na(stop_seq)) %>%
+  count(direction, geo_node_id, geo_node_name)
+
+
+```
+
+```{r}
+# Remove stop times above the 99th percentile -> dat2 (final dataset)
+
+dat2_raw <- dat2_raw %>%
+  group_by(direction) %>%
+  mutate(terminal = stop_seq %in% range(stop_seq, na.rm = TRUE)) %>%
+  ungroup()
+
+max_time_stopped <- quantile(dat2_raw$time_stopped, 0.99)
+n_high <- sum(dat2_raw$time_stopped > max_time_stopped)
+
+dat2 <- dat2_raw %>%
+  filter(time_stopped <= max_time_stopped)
+
+```
+
+```{r}
+#Cleaning summary
+
+removal_summary <- data.frame(
+  reason = c("Missing arrival or departure time",
+             "Negative stop time (departure before arrival)",
+             "Stop time above 99th percentile",
+             "Total removed"),
+  n = c(n_missing, n_negative, n_high, n_missing + n_negative + n_high)
+)
+removal_summary$percent <- round(100 * removal_summary$n / n_start, 2)
+removal_summary
+
+cat("Rows after aggregation:", n_start, "| Final rows:", nrow(dat2),
+    "| Stop-time cutoff:", round(max_time_stopped), "seconds\n")
+summary(dat2$time_stopped)
+
+```
+
+```{r theme}
+#graph theme
+
+theme_pub <- theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(color = "grey30"),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    strip.text  = element_text(face = "bold")
+  )
+
+dir_cols <- c("Northbound" = "#0072B2", "Southbound" = "#D55E00")
+hour_axis <- scale_x_continuous(breaks = seq(0, 23, 2), labels = function(x) sprintf("%02d:00", x))
+```
+
+```{r, fig.height = 5}
+#jitter boxplot
+
+p1d <- ggplot(dat2, aes(factor(hour_bin), time_stopped)) +
+  geom_violin(fill = "#6baed6", colour = "#2171b5", linewidth = 0.25,
+              scale = "width", adjust = 1.5) +
+  scale_x_discrete(labels = function(h) paste0(h, ":00")) +
+  scale_y_sqrt(breaks = c(0, 5, 10, 20, 40, 60, 90, 120)) +
+  coord_cartesian(ylim = c(0, 125), expand = FALSE) +
+  labs(title = "Stop Time by Hour of Day",
+       x = "Hour of arrival", y = "Stop time (seconds with\nsquare-root scale)") +
+  theme_pub +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+p1d
+ggsave("fig1_stop_time_by_hour.png", p1d, width = 10, height = 5.5, dpi = 300, bg = "white")
+```
+
+```{r plot-1b}
+#southbound and northbound by hour, median by line
+
+hourly <- dat2 %>%
+  filter(!is.na(direction)) %>%
+  group_by(direction, hour_bin) %>%
+  summarise(median = median(time_stopped), n = n(), .groups = "drop") %>%
+  filter(n >= 20)   # drop hours with too few stops for a reliable median
+
+p1b <- ggplot(hourly, aes(x = hour_bin, y = median, color = direction)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  scale_color_manual(values = dir_cols, name = NULL) +
+  hour_axis +
+  expand_limits(y = c(0, 30)) + #axis covers at least 0 to 30
+  scale_y_continuous(breaks = seq(0, 30, by = 5)) + #label every 5 seconds
+  labs(title = "Median Stop Time Across Hour of Day by Direction",
+       x = "Hour of arrival", y = "Stop time (seconds)") +
+  theme_pub
+p1b
+ggsave("fig1b_median_line_by_hour.png", p1b, width = 8, height = 5, dpi = 300)
+```
+
+# Stop time by location / stop
+
+```{r}
+#Helper chunk
+n_peaks <- 3     #slowest stops per direction to label and plot in Figs 1-3
+
+# Mid-route scheduled timepoints from the published 70 Grand timetable
+timepoint_patterns <- c("TRANSIT CENTER", "CHIPPEWA", "ARSENAL", "SAINT LOUIS", "ST\\.? LOUIS")
+
+# Short stop names for labels: "GRAND @ CHIPPEWA NB" -> "Chippewa"
+clean_label <- function(x) {
+  x <- sub("^GRAND @\\s*", "", x, ignore.case = TRUE)
+  x <- sub("\\s+(NB|SB)$", "", x)
+  x <- sub("\\s*@\\s*GRAND$", "", x, ignore.case = TRUE)
+  tools::toTitleCase(tolower(x))
+}
+
+dir_abbr <- function(d) ifelse(d == "Northbound", "NB", "SB")
+
+save_fig <- function(file, plot, width, height) {
+  ggsave(file, plot, width = width, height = height, dpi = 300, bg = "white")
+}
+
+cap_theme <- theme(plot.caption.position = "plot",
+                   plot.caption = element_text(hjust = 0, colour = "grey30"))
+
+#Stop-level table (shared by all figures)
+stops <- dat2 %>%
+  filter(!is.na(stop_seq)) %>%
+  group_by(direction, stop_seq, stop_id, geo_node_name) %>%
+  summarise(n             = n(),
+            median_time   = median(time_stopped),
+            n_long        = sum(time_stopped > 60),
+            n_long_no_pax = sum(time_stopped > 60 & boardings + alightings == 0),
+            .groups = "drop") %>%
+  group_by(direction) %>%
+  mutate(terminal = stop_seq %in% range(stop_seq)) %>%
+  ungroup() %>%
+  mutate(label           = clean_label(geo_node_name),
+         timepoint       = grepl(paste(timepoint_patterns, collapse = "|"),
+                                 geo_node_name, ignore.case = TRUE),
+         pct_long_no_pax = ifelse(n_long > 0, 100 * n_long_no_pax / n_long, NA))
+
+#Mid-route stops with enough data
+stops_ok <- stops %>% filter(!terminal, n >= 20)
+
+#Slowest stops per direction
+peaks <- stops_ok %>%
+  group_by(direction) %>%
+  slice_max(median_time, n = n_peaks, with_ties = FALSE) %>%
+  ungroup() %>%
+  arrange(direction, stop_seq) %>%
+  mutate(panel = paste0(dir_abbr(direction), ": ", label, " (stop ", stop_seq, ")"))
+
+```
+
+```{r, fig.height = 8}
+#median stop time along the route
+
+y_step <- 10
+y_max  <- ceiling(max(stops_ok$median_time) / y_step) * y_step + 2 * y_step  # room for labels
+
+make_line <- function(dir_choice) {
+  d <- stops_ok %>%
+    filter(direction == dir_choice) %>%
+    select(stop_seq, median_time) %>%
+    tidyr::complete(stop_seq = tidyr::full_seq(stop_seq, 1))   # gaps break the line
+
+  lab <- peaks %>% filter(direction == dir_choice)
+
+  ggplot(d, aes(stop_seq, median_time)) +
+    geom_line(colour = dir_cols[[dir_choice]], linewidth = 0.9, na.rm = TRUE) +
+    geom_point(colour = dir_cols[[dir_choice]], size = 1.8, na.rm = TRUE) +
+    geom_text_repel(data = lab, aes(label = label),
+                    nudge_y = 8, direction = "x", size = 3.3, colour = "grey15",
+                    segment.colour = "grey50", segment.size = 0.3,
+                    min.segment.length = 0, seed = 1) +
+    scale_x_continuous(breaks = seq(0, max(d$stop_seq), by = 5),
+                       expand = expansion(mult = 0.02)) +
+    scale_y_continuous(limits = c(0, y_max), breaks = seq(0, y_max, by = y_step),
+                       expand = expansion(mult = c(0, 0.02))) +
+    labs(title = dir_choice,
+         x = "Stop number along route (first stop = 1)",
+         y = "Median stop time (seconds)") +
+    theme_pub +
+    theme(plot.title = element_text(face = "bold", size = 12))
+}
+
+fig1 <- (make_line("Northbound") + labs(x = NULL)) /
+  make_line("Southbound") +
+  plot_annotation(
+    title    = "Median Stop Time Along Route",
+    caption  = paste0("Labeled = ", n_peaks),
+    theme = theme(plot.title    = element_text(face = "bold", size = 16),
+                  plot.subtitle = element_text(colour = "grey30"),
+                  plot.caption  = element_text(hjust = 0, colour = "grey30"))
+  )
+
+fig1
+save_fig("fig_t2_1_stop_time_along_route.png", fig1, 10, 9)
+
+```
+
+```{r, fig.height = 5.5}
+n_peaks <- 3 #slowest stops per direction
+
+#Long stops with no passengers
+# Stops to label (names as they appear after shortening)
+label_stops <- c("Chippewa", "Cherokee", "Grand Transit Center", "Broadway", "Gravois")
+drop_labels <- c("Gravois (NB)")   # specific direction labels to hide
+
+hold_ok <- stops_ok %>% filter(n_long >= 20)
+
+#Jitter
+set.seed(42)
+hold_ok <- hold_ok %>%
+  mutate(x_j = median_time     + runif(n(), -1.2, 1.2),
+         y_j = pct_long_no_pax + runif(n(), -1.5, 1.5),
+         lab = ifelse(label %in% label_stops,
+                      paste0(label, " (", dir_abbr(direction), ")"), ""),
+         lab = ifelse(lab %in% drop_labels, "", lab))
+
+#Label positions relative to each point
+label_offsets <- tibble::tribble(
+  ~lab,                          ~dx,  ~dy, ~hjust,
+  "Broadway (SB)",                -2,   -5,    1,
+  "Gravois (SB)",                1.5,    6,    0,
+  "Chippewa (NB)",                -1,    7,  0.5,
+  "Cherokee (NB)",                 0,   -6,  0.5,
+  "Grand Transit Center (NB)",    -2,    5,    1,
+  "Grand Transit Center (SB)",     0,   11,  0.5
+)
+
+hold_lab <- hold_ok %>%
+  filter(lab != "") %>%
+  left_join(label_offsets, by = "lab") %>%
+  mutate(dx = coalesce(dx, 0), dy = coalesce(dy, 5), hjust = coalesce(hjust, 0.5),
+         lx = x_j + dx, ly = y_j + dy)
+
+#Plot
+fig_t2_4 <- ggplot(hold_ok, aes(x_j, y_j)) +
+  geom_segment(data = hold_lab,
+               aes(xend = lx, yend = ly - sign(dy) * 1.5),
+               colour = "grey55", linewidth = 0.3) +
+  geom_point(aes(colour = direction), size = 2.4, alpha = 0.8) +
+  geom_text(data = hold_lab, aes(lx, ly, label = lab, hjust = hjust),
+            size = 3, colour = "grey15") +
+  scale_colour_manual(values = dir_cols, name = NULL) +
+    scale_y_continuous(breaks = seq(0, 100, by = 10),
+                     labels = function(x) paste0(x, "%"),
+                     expand = expansion(mult = c(0.1, 0.08))) +
+  scale_x_continuous(expand = expansion(mult = c(0.05, 0.12))) +
+  labs(title = "Long Stops With No Passengers By Stop",
+       x = "Median stop time (seconds)",
+       y = "Share of stops over 60s with\nno boardings or alightings") +
+  theme_pub +
+  theme(legend.position = "top") +
+  cap_theme
+
+fig_t2_4
+save_fig("fig_t2_4_long_stops_no_passengers.png", fig_t2_4, 9, 7)
+```
+
+# Ridership and Adherence
+
+```{r}
+# dat_rider: the aggregated data (dat1), the same data the sample code writes
+# to bus_stop_data_v1.csv, so these graphs match their original versions
+dat_rider <- dat1
+head(dat_rider)
+```
+
+```{r}
+dat_rider <- dat_rider %>% select(-c('service_type_id', 'block_id', 'block_abbr', 'route_id', 'service_type_id', 'property_tag','geo_node_id', 'latitude', 'longitude'))
+```
+
+```{r}
+dat_rider$time_stopped <- dat_rider$departure_time - dat_rider$arrival_time
+```
+
+# Stop time vs. Boardings/Alightings
+
+```{r}
+ggplot(dat_rider, aes(x = time_stopped, y = boardings + alightings, color = factor(route_abbr))) +
+  geom_point(alpha = 0.5) +
+  labs(
+    x = "Time Stopped",
+    y = "Boardings + Alightings",
+    color = "Route",
+    title = "Total Ridership Activity vs. Time Stopped"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(dat_rider, aes(x = time_stopped, y = boardings, color = factor(route_abbr))) +
+  geom_point(alpha = 0.5) +
+  labs(
+    x = "Time Stopped",
+    y = "Boardings",
+    color = "Route",
+    title = "Total Ridership Activity vs. Time Stopped, by Route"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(dat_rider, aes(x = time_stopped, y = alightings, color = factor(route_abbr))) +
+  geom_point(alpha = 0.5) +
+  labs(
+    x = "Time Stopped",
+    y = "Alightings",
+    color = "Route",
+    title = "Total Ridership Activity vs. Time Stopped, by Route"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+dat_rider$on_time <- with(dat_rider, ifelse(dat_rider$adherence > 60, 1,
+                              ifelse(dat_rider$adherence < -300, -1, 0)))
+```
+
+```{r}
+dat_rider$on_time_color <- factor(dat_rider$on_time,
+                           levels = c(1, 0, -1),
+                           labels = c("blue", "black", "red"))
+
+ggplot(dat_rider, aes(x = time_stopped, y = boardings, color = on_time_color)) +
+  geom_point(alpha = 0.4) +
+  scale_color_identity(guide = "legend", name = "On Time Status") +
+  labs(x = "Time Stopped", y = "Boardings") +
+  theme_minimal()
+```
+
+```{r, fig.height = 7}
+dat_rider$on_time <- with(dat_rider, ifelse(adherence > 60, 1,
+                                  ifelse(adherence < -300, -1, 0)))
+
+cat("NA count in on_time:", sum(is.na(dat_rider$on_time)), "\n")
+cat("NA count in adherence:", sum(is.na(dat_rider$adherence)), "\n")
+
+dat_rider <- dat_rider %>% filter(!is.na(on_time))
+
+dat_rider$on_time_label <- factor(dat_rider$on_time,
+                             levels = c(1, 0, -1),
+                             labels = c("Early (adherence > 60)",
+                                        "On Time",
+                                        "Late (adherence < -300)"))
+
+p1 <- ggplot(dat_rider, aes(x = time_stopped + 1, fill = on_time_label)) +
+  geom_histogram(bins = 60) +
+  scale_x_log10() +
+  scale_fill_manual(values = c("blue", "black", "red")) +
+  facet_wrap(~on_time_label, ncol = 1, scales = "free_y") +
+  labs(
+    x = "Time Stopped (seconds, log scale)",
+    y = "Count of Stops",
+    title = "Distribution of Stop Time by On-Time Status"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        strip.text = element_text(face = "bold"))
+
+print(p1)
+ggsave("time_stopped_histogram.png", plot = p1, width = 8, height = 10, dpi = 300)
+```
+
+```{r}
+dat_rider$boardings_bin <- cut(dat_rider$boardings,
+                          breaks = c(-1, 0, 1, 2, 5, 10, 20, Inf),
+                          labels = c("0", "1", "2", "3-5", "6-10", "11-20", "20+"))
+
+p2 <- ggplot(dat_rider, aes(x = boardings_bin, y = time_stopped, fill = on_time_label)) +
+  geom_boxplot(outlier.alpha = 0.1, outlier.size = 0.5) +
+  scale_y_log10() +
+  scale_fill_manual(values = c("blue", "black", "red")) +
+  labs(
+    x = "Boardings (binned)",
+    y = "Time Stopped (seconds, log scale)",
+    fill = "On-Time Status",
+    title = "Stop Time Variation Across Ridership Levels"
+  ) +
+  theme_minimal()
+
+print(p2)
+ggsave("time_stopped_by_boardings_boxplot.png", plot = p2, width = 9, height = 6, dpi = 300)
+```
