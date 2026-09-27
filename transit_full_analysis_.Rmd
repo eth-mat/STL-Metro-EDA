@@ -627,3 +627,61 @@ ggplot(pm_data, aes(x = time_stopped, y = boardings + alightings)) +
   ) +
   theme_pub
 ```
+
+```{r}
+data %>%
+  slice_sample(prop = 0.75) %>%
+  filter(over_2500 == 0) %>%
+  filter(impossible_ridership == 0) %>%
+  ggplot(aes(x = time_stopped, y = boardings,
+             color = factor(PM_arrival))) +
+  geom_jitter(size = 0.025, width = 0, height = 0.15) +
+  scale_x_sqrt(
+    limits = c(0, 2500),
+    breaks = c(0, 50, 100, 200, 300, 500, 750, 1000, 1500, 2000, 2500)
+  ) +
+  scale_y_sqrt(
+    breaks = c(0, 1, 2, 5, 10, 20, 30, 50, 75, 100, 150, 200)
+  ) +
+  scale_color_manual(
+    values = c("0" = "blue", "1" = "orange"),
+    labels = c("0" = "AM", "1" = "PM"),
+    name = "Arrival"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+  labs(
+    x = "Time Stopped (square-root scale)",
+    y = "Boardings (square-root scale)",
+    title = "Boardings vs. Time Stopped"
+  ) +
+  theme_pub
+```
+
+```{r}
+data %>%
+  slice_sample(prop = 0.75) %>%
+  filter(over_2500 == 0) %>%
+  filter(impossible_ridership == 0) %>%
+  ggplot(aes(x = time_stopped, y = alightings,
+             color = factor(PM_arrival))) +
+  geom_jitter(size = 0.025, width = 0, height = 0.15) +
+  scale_x_sqrt(
+    limits = c(0, 2500),
+    breaks = c(0, 50, 100, 200, 300, 500, 750, 1000, 1500, 2000, 2500)
+  ) +
+  scale_y_sqrt(
+    breaks = c(0, 1, 2, 5, 10, 20, 30, 50, 75, 100, 150, 200)
+  ) +
+  scale_color_manual(
+    values = c("0" = "blue", "1" = "orange"),
+    labels = c("0" = "AM", "1" = "PM"),
+    name = "Arrival"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+  labs(
+    x = "Time Stopped (square-root scale)",
+    y = "Alightings (square-root scale)",
+    title = "Alightings vs. Time Stopped"
+  ) +
+  theme_pub
+```
