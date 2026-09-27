@@ -509,16 +509,11 @@ ggplot(data, aes(x = sqrt(time_stopped), y = sqrt(boardings + alightings))) +
 ```
 
 ```{r}
-
+print(paste0("Points removed over time-stopped: ", sum(data$over_2500, na.rm = TRUE)))
+print(paste0("Percent removed over time-stopped: ", (sum(data$over_2500, na.rm = TRUE) / nrow(data)) * 100, "%"))
 ```
 
 ```{r}
-
-```
-
-```{print(paste0("Points removed over time-stopped: ", sum(data$over_2500, na.rm = TRUE)))}
-print(paste0("Percent removed over time-stopped: ", (sum(data$over_2500, na.rm = TRUE) / nrow(data)) * 100, "%"))
-
 data$impossible_ridership <- as.integer((data$boardings + data$alightings) > 0 & data$time_stopped == 0)
 print(paste0("Impossible ridership totals removed: ", sum(data$impossible_ridership, na.rm = TRUE)))
 ```
@@ -542,7 +537,6 @@ data %>%
 
 ```{r}
 data$PM_arrival <- as.integer(data$arrival_time > 43200)
-
 ```
 
 ```{r}
@@ -575,42 +569,6 @@ data %>%
 ```
 
 ```{r}
-stats_data <- data %>%
-  filter(impossible_ridership == 0,
-         !is.na(PM_arrival),
-         !is.na(time_stopped))
-
-pm_over_750 <- sum(stats_data$PM_arrival == 1 & stats_data$time_stopped > 750)
-pm_total    <- sum(stats_data$PM_arrival == 1)
-
-am_over_750 <- sum(stats_data$PM_arrival == 0 & stats_data$time_stopped > 750)
-am_total    <- sum(stats_data$PM_arrival == 0)
-
-cat(sprintf("PM: %d of %d stopped > 750 s (%.2f%%)\n",
-            pm_over_750, pm_total, 100 * pm_over_750 / pm_total))
-cat(sprintf("AM: %d of %d stopped > 750 s (%.2f%%)\n",
-            am_over_750, am_total, 100 * am_over_750 / am_total))
-```
-
-```{r}
-dir_data <- data %>%
-  filter(impossible_ridership == 0,
-         route_direction_id %in% c(7, 9),
-         !is.na(time_stopped))
-
-nb_over_750 <- sum(dir_data$route_direction_id == 7 & dir_data$time_stopped > 750)
-nb_total    <- sum(dir_data$route_direction_id == 7)
-
-sb_over_750 <- sum(dir_data$route_direction_id == 9 & dir_data$time_stopped > 750)
-sb_total    <- sum(dir_data$route_direction_id == 9)
-
-cat(sprintf("Northbound: %d of %d stopped > 750 s (%.2f%%)\n",
-            nb_over_750, nb_total, 100 * nb_over_750 / nb_total))
-cat(sprintf("Southbound: %d of %d stopped > 750 s (%.2f%%)\n",
-            sb_over_750, sb_total, 100 * sb_over_750 / sb_total))
-```
-
-```{r}
 dir_data %>%
   filter(!is.na(PM_arrival)) %>%
   mutate(direction = ifelse(route_direction_id == 7, "Northbound", "Southbound"),
@@ -621,6 +579,3 @@ dir_data %>%
             pct      = 100 * over_750 / total,
             .groups  = "drop")
 ```
-
-
-
