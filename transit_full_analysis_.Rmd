@@ -11,9 +11,15 @@ knitr::opts_chunk$set(
 )
 ```
 
-```{r}
+## Load files + libraries
 
-input_file <- "~/Desktop/Statistics_Practicum/70_grand_20250701-20260630.csv"
+```{r}
+#Debra's filepath
+#input_file <- "~/Desktop/Statistics_Practicum/70_grand_20250701-20260630.csv"
+
+#Ethan's filepath
+input_file <- "../70_grand_20250701-20260630.csv"
+
 
 #setup
 library(data.table)
@@ -169,6 +175,8 @@ cat("Rows after aggregation:", n_start, "| Final rows:", nrow(dat2),
 summary(dat2$time_stopped)
 
 ```
+
+# Stop time vs. time of day
 
 ```{r theme}
 #graph theme
@@ -409,39 +417,14 @@ dat_rider$time_stopped <- dat_rider$departure_time - dat_rider$arrival_time
 # Stop time vs. Boardings/Alightings
 
 ```{r}
-ggplot(dat_rider, aes(x = time_stopped, y = boardings + alightings, color = factor(route_abbr))) +
+ggplot(dat_rider, aes(x = time_stopped, y = boardings + alightings)) +
   geom_point(alpha = 0.5) +
   labs(
     x = "Time Stopped",
     y = "Boardings + Alightings",
-    color = "Route",
     title = "Total Ridership Activity vs. Time Stopped"
   ) +
-  theme_minimal()
-```
-
-```{r}
-ggplot(dat_rider, aes(x = time_stopped, y = boardings, color = factor(route_abbr))) +
-  geom_point(alpha = 0.5) +
-  labs(
-    x = "Time Stopped",
-    y = "Boardings",
-    color = "Route",
-    title = "Total Ridership Activity vs. Time Stopped, by Route"
-  ) +
-  theme_minimal()
-```
-
-```{r}
-ggplot(dat_rider, aes(x = time_stopped, y = alightings, color = factor(route_abbr))) +
-  geom_point(alpha = 0.5) +
-  labs(
-    x = "Time Stopped",
-    y = "Alightings",
-    color = "Route",
-    title = "Total Ridership Activity vs. Time Stopped, by Route"
-  ) +
-  theme_minimal()
+  theme_pub
 ```
 
 ```{r}
@@ -458,25 +441,26 @@ ggplot(dat_rider, aes(x = time_stopped, y = boardings, color = on_time_color)) +
   geom_point(alpha = 0.4) +
   scale_color_identity(guide = "legend", name = "On Time Status") +
   labs(x = "Time Stopped", y = "Boardings") +
-  theme_minimal()
+  theme_pub
 ```
 
-```{r, fig.height = 7}
-dat_rider$on_time <- with(dat_rider, ifelse(adherence > 60, 1,
+```{r}
+data <- dat_rider
+data$on_time <- with(data, ifelse(adherence > 60, 1,
                                   ifelse(adherence < -300, -1, 0)))
 
-cat("NA count in on_time:", sum(is.na(dat_rider$on_time)), "\n")
-cat("NA count in adherence:", sum(is.na(dat_rider$adherence)), "\n")
+cat("NA count in on_time:", sum(is.na(data$on_time)), "\n")
+cat("NA count in adherence:", sum(is.na(data$adherence)), "\n")
 
-dat_rider <- dat_rider %>% filter(!is.na(on_time))
+data <- data %>% filter(!is.na(on_time))
 
-dat_rider$on_time_label <- factor(dat_rider$on_time,
+data$on_time_label <- factor(data$on_time,
                              levels = c(1, 0, -1),
                              labels = c("Early (adherence > 60)",
                                         "On Time",
                                         "Late (adherence < -300)"))
 
-p1 <- ggplot(dat_rider, aes(x = time_stopped + 1, fill = on_time_label)) +
+p1 <- ggplot(data, aes(x = time_stopped + 1, fill = on_time_label)) +
   geom_histogram(bins = 60) +
   scale_x_log10() +
   scale_fill_manual(values = c("blue", "black", "red")) +
@@ -486,20 +470,18 @@ p1 <- ggplot(dat_rider, aes(x = time_stopped + 1, fill = on_time_label)) +
     y = "Count of Stops",
     title = "Distribution of Stop Time by On-Time Status"
   ) +
-  theme_minimal() +
+  theme_pub +
   theme(legend.position = "none",
         strip.text = element_text(face = "bold"))
 
 print(p1)
 ggsave("time_stopped_histogram.png", plot = p1, width = 8, height = 10, dpi = 300)
-```
 
-```{r}
-dat_rider$boardings_bin <- cut(dat_rider$boardings,
+data$boardings_bin <- cut(data$boardings,
                           breaks = c(-1, 0, 1, 2, 5, 10, 20, Inf),
                           labels = c("0", "1", "2", "3-5", "6-10", "11-20", "20+"))
 
-p2 <- ggplot(dat_rider, aes(x = boardings_bin, y = time_stopped, fill = on_time_label)) +
+p2 <- ggplot(data, aes(x = boardings_bin, y = time_stopped, fill = on_time_label)) +
   geom_boxplot(outlier.alpha = 0.1, outlier.size = 0.5) +
   scale_y_log10() +
   scale_fill_manual(values = c("blue", "black", "red")) +
@@ -509,8 +491,136 @@ p2 <- ggplot(dat_rider, aes(x = boardings_bin, y = time_stopped, fill = on_time_
     fill = "On-Time Status",
     title = "Stop Time Variation Across Ridership Levels"
   ) +
-  theme_minimal()
+  theme_pub
 
 print(p2)
 ggsave("time_stopped_by_boardings_boxplot.png", plot = p2, width = 9, height = 6, dpi = 300)
 ```
+
+```{r}
+ggplot(data, aes(x = sqrt(time_stopped), y = sqrt(boardings + alightings))) +
+  geom_jitter(size = 0.05, width = 0, height = 0.1) +
+  labs(
+    x = "Time Stopped",
+    y = "Boardings + Alightings",
+    title = "Total Ridership Activity vs. Time Stopped"
+  ) +
+  theme_pub
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{print(paste0("Points removed over time-stopped: ", sum(data$over_2500, na.rm = TRUE)))}
+print(paste0("Percent removed over time-stopped: ", (sum(data$over_2500, na.rm = TRUE) / nrow(data)) * 100, "%"))
+
+data$impossible_ridership <- as.integer((data$boardings + data$alightings) > 0 & data$time_stopped == 0)
+print(paste0("Impossible ridership totals removed: ", sum(data$impossible_ridership, na.rm = TRUE)))
+```
+
+```{r}
+data %>%
+  slice_sample(prop = 0.3) %>%
+  filter(over_2500 == 0) %>%
+  filter(impossible_ridership == 0) %>%
+  ggplot(aes(x = time_stopped, y = boardings + alightings)) +
+  geom_jitter(size = 0.025, width = 0, height = 0.15) +
+  scale_x_sqrt(limits = c(0, 2500)) +
+  scale_y_sqrt() +
+  labs(
+    x = "Time Stopped (square-root scale)",
+    y = "Boardings + Alightings (square-root scale)",
+    title = "Total Ridership Activity vs. Time Stopped"
+  ) +
+  theme_pub
+```
+
+```{r}
+data$PM_arrival <- as.integer(data$arrival_time > 43200)
+
+```
+
+```{r}
+data %>%
+  slice_sample(prop = 0.3) %>%
+  filter(over_2500 == 0) %>%
+  filter(impossible_ridership == 0) %>%
+  ggplot(aes(x = time_stopped, y = boardings + alightings,
+             color = factor(PM_arrival))) +
+  geom_jitter(size = 0.025, width = 0, height = 0.15) +
+  scale_x_sqrt(
+    limits = c(0, 2500),
+    breaks = c(0, 50, 100, 200, 300, 500, 750, 1000, 1500, 2000, 2500)
+  ) +
+  scale_y_sqrt(
+    breaks = c(0, 1, 2, 5, 10, 20, 30, 50, 75, 100, 150, 200)
+  ) +
+  scale_color_manual(
+    values = c("0" = "blue", "1" = "orange"),
+    labels = c("0" = "AM", "1" = "PM"),
+    name = "Arrival"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+  labs(
+    x = "Time Stopped (square-root scale)",
+    y = "Boardings + Alightings (square-root scale)",
+    title = "Total Ridership Activity vs. Time Stopped"
+  ) +
+  theme_pub
+```
+
+```{r}
+stats_data <- data %>%
+  filter(impossible_ridership == 0,
+         !is.na(PM_arrival),
+         !is.na(time_stopped))
+
+pm_over_750 <- sum(stats_data$PM_arrival == 1 & stats_data$time_stopped > 750)
+pm_total    <- sum(stats_data$PM_arrival == 1)
+
+am_over_750 <- sum(stats_data$PM_arrival == 0 & stats_data$time_stopped > 750)
+am_total    <- sum(stats_data$PM_arrival == 0)
+
+cat(sprintf("PM: %d of %d stopped > 750 s (%.2f%%)\n",
+            pm_over_750, pm_total, 100 * pm_over_750 / pm_total))
+cat(sprintf("AM: %d of %d stopped > 750 s (%.2f%%)\n",
+            am_over_750, am_total, 100 * am_over_750 / am_total))
+```
+
+```{r}
+dir_data <- data %>%
+  filter(impossible_ridership == 0,
+         route_direction_id %in% c(7, 9),
+         !is.na(time_stopped))
+
+nb_over_750 <- sum(dir_data$route_direction_id == 7 & dir_data$time_stopped > 750)
+nb_total    <- sum(dir_data$route_direction_id == 7)
+
+sb_over_750 <- sum(dir_data$route_direction_id == 9 & dir_data$time_stopped > 750)
+sb_total    <- sum(dir_data$route_direction_id == 9)
+
+cat(sprintf("Northbound: %d of %d stopped > 750 s (%.2f%%)\n",
+            nb_over_750, nb_total, 100 * nb_over_750 / nb_total))
+cat(sprintf("Southbound: %d of %d stopped > 750 s (%.2f%%)\n",
+            sb_over_750, sb_total, 100 * sb_over_750 / sb_total))
+```
+
+```{r}
+dir_data %>%
+  filter(!is.na(PM_arrival)) %>%
+  mutate(direction = ifelse(route_direction_id == 7, "Northbound", "Southbound"),
+         period    = ifelse(PM_arrival == 1, "PM", "AM")) %>%
+  group_by(direction, period) %>%
+  summarise(over_750 = sum(time_stopped > 750),
+            total    = n(),
+            pct      = 100 * over_750 / total,
+            .groups  = "drop")
+```
+
+
+
